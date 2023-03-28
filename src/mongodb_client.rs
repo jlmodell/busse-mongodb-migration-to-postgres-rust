@@ -1,18 +1,16 @@
-use crate::models;
+use crate::config::Config;
 
-use models::Sale;
-use mongodb::{Client, Collection, Cursor, options::{FindOptions, ClientOptions}, bson::{doc, Document}};
-
-
-const DB: &str = "busse_sales_data_warehouse";
-const COLLECTION: &str = "sales";
-
+use mongodb::{Client, Cursor, options::{FindOptions, ClientOptions, FindOneOptions}, bson::{doc, Document}};
+use anyhow::Result;
 pub struct MongoDbClient {
-    client: Client,    
+    client: Client,
 }
 
 impl MongoDbClient {
-    pub async fn new(uri: &str) -> Self {
+    pub async fn new() -> Self {
+        let config: Config = Config::new();
+        let uri: &str = config.get_mongo_uri();
+
         let mut client_options: ClientOptions = ClientOptions::parse(uri).await.unwrap();
         client_options.app_name = Some("busse".to_string());
 
@@ -26,44 +24,68 @@ impl MongoDbClient {
     pub fn get_client(&self) -> &Client {
         &self.client
     }
-
-    pub async fn get_databases(&self) -> Vec<String> {
-        self.client.list_database_names(None, None).await.unwrap()
-    }
 }
 
-pub struct SalesDatabase {
+pub struct MongoDatabase {
     client: Client,
-    database: Collection<Sale>,
     db: String,
     collection: String,
 }
 
-impl SalesDatabase {
-    pub fn new(client: &Client) -> Self {        
+pub trait MongoDbModel {
+    fn to_document(&self) -> Document;
+    fn from_document(doc: Document) -> Self;
+    fn get_collection_name() -> String;
+}
+
+impl MongoDatabase {
+    pub fn new(client: &Client, db: Option<&str>, collection: Option<&str>) -> Self {
+        let _db: &str = match db {
+            Some(d) => d,
+            None => panic!("No database specified."),
+        };
+
+        let _collection: &str = match collection {
+            Some(c) => c,
+            None => panic!("No collection specified."),
+        };        
+
         Self {
-            client: client.clone(),
-            database: client.database(DB).collection(COLLECTION),
-            db: DB.to_string(),
-            collection: COLLECTION.to_string(),
+            client: client.clone(),            
+            db: _db.to_string(),
+            collection: _collection.to_string(),
         }
-    }
+    }        
 
-    pub fn get_database(&self) -> &Collection<Sale> {
-        &self.database
-    }
+    pub async fn find_docs_with_filter<T>(&self, filter: Option<Document>, options: Option<FindOptions>) -> Result<Cursor<T>, mongodb::error::Error> {        
+        let _filter: Document = match filter {
+            Some(f) => f,
+            None => doc! { },
+        };
 
-    pub async fn get_collections(&self) -> Vec<String> {        
-        self.client.database(&self.db).list_collection_names(None).await.unwrap()      
-    }
-
-    pub async fn find_docs_with_filter(&self, key: &str) -> Result<Cursor<Sale>, mongodb::error::Error> {        
-        let filter: Document = doc! { "key": doc! { "$regex": &key, "$options": "i"} };
-        let options: FindOptions = FindOptions::builder().sort(doc! { "rep": 1 }).build();
+        let _options: FindOptions = match options {
+            Some(o) => o,
+            None => FindOptions::builder().sort(doc! { }).build(),
+        };
         
-        let docs = self.database.find(filter, options).await?;
+        let docs = self.client.database(&self.db).collection::<T>(&self.collection).find(_filter, _options).await?;
 
         Ok(docs)
+    }
+
+    pub async fn find_doc_with_filter<T>(&self, filter: Option<Document>) -> Result<(), mongodb::error::Error> {        
+        let _filter: Document = match filter {
+            Some(f) => f,
+            None => doc! { },
+        };
+
+        let _options = FindOneOptions::builder().sort(doc! { }).build();
+
+        let coll = self.client.database(&self.db).collection::<T>(&self.collection);
+
+        let doc = coll.find_one(_filter, _options).await?;
+
+        Ok(())        
     }
 }
 
